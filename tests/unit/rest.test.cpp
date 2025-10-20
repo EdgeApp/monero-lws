@@ -133,6 +133,7 @@ LWS_CASE("rest_server")
         epee::to_span(addresses),
         std::vector<std::string>{admin_server},
         db.clone(),
+        std::make_shared<mempool>(),
         MONERO_UNWRAP(rpc.clone()),
         config
       );
