@@ -643,7 +643,17 @@ namespace lws
       Launches `thread_count` threads to run `scan_loop`, and then polls for
       active account changes in background
     */
-    void check_loop(scanner_sync& self, db::storage disk, rpc::context& ctx, const std::size_t thread_count, const std::string& lws_server_addr, std::string lws_server_pass, std::vector<lws::account> users, std::vector<db::account_id> active, const scanner_options& opts)
+    void check_loop(
+      scanner_sync& self,
+      db::storage disk,
+      rpc::context& ctx,
+      std::shared_ptr<lws::mempool> pool,
+      const std::size_t thread_count,
+      const std::string& lws_server_addr,
+      std::string lws_server_pass,
+      std::vector<lws::account> users,
+      std::vector<db::account_id> active,
+      const scanner_options& opts)
     {
       assert(users.size() == active.size());
       assert(thread_count || !lws_server_addr.empty());
@@ -719,6 +729,32 @@ namespace lws
             MONERO_UNWRAP(ctx.connect()), disk.clone(), std::move(thread_users), queues[i], opts
           );
           threads.emplace_back(attrs, std::bind(&do_scan_loop, std::ref(self), std::move(data), i));
+        }
+
+        if (pool && !ctx.pub_address().empty()) {
+          auto client = std::make_shared<rpc::client>(MONERO_UNWRAP(ctx.connect()));
+          threads.emplace_back(attrs, [pool, client, &self] ()
+          {
+            while (self.is_running())
+            {
+              try
+              {
+                  auto result = pool_update_loop(pool, *client);
+                  if (!result
+                    && result.error() != make_error_code(lws::error::signal_abort_process)
+                    && result.error() != make_error_code(lws::error::signal_abort_scan))
+                    MERROR("Pool update loop failed " << result.error());
+              }
+              catch (std::exception const& e)
+              {
+                MERROR("Pool update threw " << e.what());
+              }
+              catch (...)
+              {
+                MERROR("Pool update threw unknown exception");
+              }
+            }
+          });
         }
 
         users.clear();
@@ -1003,7 +1039,13 @@ namespace lws
     return sync_quick(sync_, disk_.clone(), std::move(client), regtest);
   }
 
-  void scanner::run(rpc::context ctx, std::size_t thread_count, const std::string& lws_server_addr, std::string lws_server_pass, const scanner_options& opts)
+  void scanner::run(
+    rpc::context ctx,
+    std::shared_ptr<mempool> pool,
+    std::size_t thread_count,
+    const std::string& lws_server_addr,
+    std::string lws_server_pass,
+    const scanner_options& opts)
   {
     if (has_shutdown())
       MONERO_THROW(common_error::kInvalidArgument, "this has shutdown");
@@ -1091,7 +1133,7 @@ namespace lws
         }
       }
       else
-        check_loop(sync_, disk_.clone(), ctx, thread_count, lws_server_addr, lws_server_pass, std::move(users), std::move(active), opts);
+        check_loop(sync_, disk_.clone(), ctx, pool, thread_count, lws_server_addr, lws_server_pass, std::move(users), std::move(active), opts);
 
       if (has_shutdown())
         return;
