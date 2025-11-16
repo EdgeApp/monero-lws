@@ -45,12 +45,14 @@ namespace lws
 {
   class mempool;
 
+  constexpr std::uint64_t MINIMUM_BLOCK_DEPTH = 16;
   struct scanner_options
   {
     std::uint32_t max_subaddresses;
     bool untrusted_daemon;
     bool regtest;
     bool block_depth_threading;
+    std::uint64_t min_block_depth;
   };
 
   //! Used in `scan_loop` by server

@@ -89,6 +89,7 @@ namespace
     const command_line::arg_descriptor<bool> version;
     const command_line::arg_descriptor<bool> auto_accept_import;
     const command_line::arg_descriptor<bool> block_depth_threading;
+    const command_line::arg_descriptor<std::uint64_t> min_block_depth;
 
     static std::string get_default_zmq()
     {
@@ -140,6 +141,7 @@ namespace
       , version{"version", "Display version and quit", false}
       , auto_accept_import{"auto-accept-import", "Account import requests are automatically accepted", false}
       , block_depth_threading{"block-depth-threading", "Balance thread workload by block depth instead of account count", false}
+      , min_block_depth{"min-block-depth", "Minimum block depth for block depth threading (defaults to 16)", lws::MINIMUM_BLOCK_DEPTH}
     {}
 
     void prepare(boost::program_options::options_description& description) const
@@ -179,6 +181,7 @@ namespace
       command_line::add_arg(description, version);
       command_line::add_arg(description, auto_accept_import);
       command_line::add_arg(description, block_depth_threading);
+      command_line::add_arg(description, min_block_depth);
     }
   };
 
@@ -201,6 +204,7 @@ namespace
     bool untrusted_daemon;
     bool regtest;
     bool block_depth_threading;
+    std::uint64_t min_block_depth;
   };
 
   void print_version(std::ostream& out)
@@ -304,7 +308,8 @@ namespace
       command_line::get_arg(args, opts.create_queue_max),
       command_line::get_arg(args, opts.untrusted_daemon),
       command_line::get_arg(args, opts.regtest),
-      command_line::get_arg(args, opts.block_depth_threading)
+      command_line::get_arg(args, opts.block_depth_threading),
+      command_line::get_arg(args, opts.min_block_depth)
     };
 
     if (prog.regtest && lws::config::network != cryptonote::MAINNET)
@@ -364,7 +369,7 @@ namespace
       prog.scan_threads,
       std::move(prog.lws_server_addr),
       std::move(prog.lws_server_pass),
-      lws::scanner_options{prog.rest_config.max_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading}
+      lws::scanner_options{prog.rest_config.max_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading, prog.min_block_depth}
     );
   }
 } // anonymous
