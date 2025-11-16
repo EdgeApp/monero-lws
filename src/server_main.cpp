@@ -86,6 +86,7 @@ namespace
     const command_line::arg_descriptor<bool> regtest;
     const command_line::arg_descriptor<bool> block_depth_threading;
     const command_line::arg_descriptor<std::uint64_t> min_block_depth;
+    const command_line::arg_descriptor<std::uint64_t> split_synced;
 
     static std::string get_default_zmq()
     {
@@ -136,6 +137,7 @@ namespace
       , regtest{"regtest", "Run in a regression testing mode", false}
       , block_depth_threading{"block-depth-threading", "Balance thread workload by block depth instead of account count", false}
       , min_block_depth{"min-block-depth", "Minimum block depth for block depth threading (defaults to 16)", lws::MINIMUM_BLOCK_DEPTH}
+      , split_synced{"split-synced", "Maximum block depth for an address to be considered synced (requires --block-depth-threading, 0 to disable)", 0}
     {}
 
     void prepare(boost::program_options::options_description& description) const
@@ -174,6 +176,7 @@ namespace
       command_line::add_arg(description, regtest);
       command_line::add_arg(description, block_depth_threading);
       command_line::add_arg(description, min_block_depth);
+      command_line::add_arg(description, split_synced);
     }
   };
 
@@ -196,6 +199,7 @@ namespace
     bool untrusted_daemon;
     bool regtest;
     bool block_depth_threading;
+    std::uint64_t split_synced;
     std::uint64_t min_block_depth;
   };
 
@@ -288,11 +292,15 @@ namespace
       command_line::get_arg(args, opts.untrusted_daemon),
       command_line::get_arg(args, opts.regtest),
       command_line::get_arg(args, opts.block_depth_threading),
+      command_line::get_arg(args, opts.split_synced),
       command_line::get_arg(args, opts.min_block_depth)
     };
 
     if (prog.regtest && lws::config::network != cryptonote::MAINNET)
       MONERO_THROW(lws::error::configuration, "Regtest cannot be used with testnet or stagenet");
+
+    if (prog.split_synced > 0 && !prog.block_depth_threading)
+      MONERO_THROW(lws::error::configuration, "--split-synced requires --block-depth-threading=true");
 
     if (!prog.lws_server_addr.empty() && (prog.rest_config.max_subaddresses || prog.untrusted_daemon))
       MONERO_THROW(lws::error::configuration, "Remote scanning cannot be used with subaddresses or untrusted daemon");
@@ -339,7 +347,7 @@ namespace
       prog.scan_threads,
       std::move(prog.lws_server_addr),
       std::move(prog.lws_server_pass),
-      lws::scanner_options{enable_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading, prog.min_block_depth}
+      lws::scanner_options{enable_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading, prog.split_synced, prog.min_block_depth}
     );
   }
 } // anonymous

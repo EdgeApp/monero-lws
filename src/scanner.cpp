@@ -1032,7 +1032,8 @@ namespace lws
           // Calculate blockdepth for each account and create pairs
           struct account_depth {
             std::size_t index;
-            std::uint64_t blockdepth;
+            std::uint64_t blockdepth;  // Adjusted blockdepth (with min_block_depth applied) for workload calculations
+            std::uint64_t raw_blockdepth;  // True blockdepth for split-sync classification
           };
           std::vector<account_depth> account_depths;
           account_depths.reserve(users.size());
@@ -1042,14 +1043,14 @@ namespace lws
           {
             const std::uint64_t raw_blockdepth = std::uint64_t(current_height) - std::uint64_t(users[i].scan_height());
             const std::uint64_t blockdepth = std::max(raw_blockdepth, opts.min_block_depth);
-            account_depths.push_back(account_depth{i, blockdepth});
+            account_depths.push_back(account_depth{i, blockdepth, raw_blockdepth});
             total_blockdepth += blockdepth;
           }
           
-          // Sort by blockdepth (smallest first)
+          // Sort by raw_blockdepth (smallest first) to group accounts by true block depth
           std::sort(account_depths.begin(), account_depths.end(),
             [](const account_depth& a, const account_depth& b) {
-              return a.blockdepth < b.blockdepth;
+              return a.raw_blockdepth < b.raw_blockdepth;
             });
           
           // Calculate target blockdepth per thread
@@ -1057,7 +1058,8 @@ namespace lws
           
           MINFO("Using block-depth threading: total_blockdepth=" << total_blockdepth 
                 << ", blockdepth_per_thread=" << blockdepth_per_thread
-                << ", min_block_depth=" << opts.min_block_depth);
+                << ", min_block_depth=" << opts.min_block_depth
+                << ", split_synced=" << (opts.split_synced > 0 ? std::to_string(opts.split_synced) : "disabled"));
           
           // Prepare thread assignment data structure
           std::vector<std::vector<lws::account>> thread_assignments(thread_count);
@@ -1065,6 +1067,7 @@ namespace lws
           // Assign accounts to threads based on cumulative blockdepth
           std::size_t current_thread = 0;
           std::uint64_t current_thread_depth = 0;
+          bool split_occurred = false;  // Track if we've split synced from unsynced
           
           for (const auto& ad : account_depths)
           {
@@ -1085,12 +1088,25 @@ namespace lws
                 // Odd thread: under-allocate (move when adding this account would exceed target)
                 should_move_to_next_thread = (current_thread_depth + ad.blockdepth > blockdepth_per_thread);
               }
-            }
-            
-            if (should_move_to_next_thread)
-            {
-              ++current_thread;
-              current_thread_depth = 0;
+              
+              // Check if we need to split synced from unsynced addresses (overrides normal allocation)
+              // Use raw_blockdepth for classification, not the adjusted blockdepth
+              if (opts.split_synced > 0 && !split_occurred && 
+                  ad.raw_blockdepth > opts.split_synced && 
+                  !thread_assignments[current_thread].empty())
+              {
+                // Force move to next thread to separate synced from unsynced
+                should_move_to_next_thread = true;
+                split_occurred = true;
+                
+                MINFO("Split-synced: separating synced and unsynced addresses at thread " << (current_thread + 1));
+              }
+              
+              if (should_move_to_next_thread)
+              {
+                ++current_thread;
+                current_thread_depth = 0;
+              }
             }
             
             thread_assignments[current_thread].push_back(std::move(users[ad.index]));
