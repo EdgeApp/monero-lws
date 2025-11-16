@@ -51,6 +51,7 @@ namespace lws
     bool untrusted_daemon;
     bool regtest;
     bool block_depth_threading;
+    std::uint64_t split_synced;
     std::uint64_t min_block_depth;
   };
 
