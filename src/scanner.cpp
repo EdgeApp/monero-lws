@@ -1064,6 +1064,10 @@ namespace lws
           // Prepare thread assignment data structure
           std::vector<std::vector<lws::account>> thread_assignments(thread_count);
           
+          // Track min/max raw block depths for each thread (for logging true block depth ranges)
+          std::vector<std::uint64_t> thread_min_raw_depth(thread_count, std::numeric_limits<std::uint64_t>::max());
+          std::vector<std::uint64_t> thread_max_raw_depth(thread_count, 0);
+          
           // Assign accounts to threads based on cumulative blockdepth
           std::size_t current_thread = 0;
           std::uint64_t current_thread_depth = 0;
@@ -1104,6 +1108,15 @@ namespace lws
               
               if (should_move_to_next_thread)
               {
+                // Log the current thread before moving to next
+                if (!thread_assignments[current_thread].empty())
+                {
+                  const std::uint64_t min_depth = thread_min_raw_depth[current_thread] == std::numeric_limits<std::uint64_t>::max() ? 0 : thread_min_raw_depth[current_thread];
+                  const std::uint64_t max_depth = thread_max_raw_depth[current_thread];
+                  MINFO("Thread " << current_thread << " added " << thread_assignments[current_thread].size() 
+                        << " addresses with true block depths " << min_depth << " to " << max_depth);
+                }
+                
                 ++current_thread;
                 current_thread_depth = 0;
               }
@@ -1111,6 +1124,21 @@ namespace lws
             
             thread_assignments[current_thread].push_back(std::move(users[ad.index]));
             current_thread_depth += ad.blockdepth;
+            
+            // Update min/max raw block depths for current thread (for logging)
+            if (ad.raw_blockdepth < thread_min_raw_depth[current_thread])
+              thread_min_raw_depth[current_thread] = ad.raw_blockdepth;
+            if (ad.raw_blockdepth > thread_max_raw_depth[current_thread])
+              thread_max_raw_depth[current_thread] = ad.raw_blockdepth;
+          }
+          
+          // Log the last thread
+          if (!thread_assignments[current_thread].empty())
+          {
+            const std::uint64_t min_depth = thread_min_raw_depth[current_thread] == std::numeric_limits<std::uint64_t>::max() ? 0 : thread_min_raw_depth[current_thread];
+            const std::uint64_t max_depth = thread_max_raw_depth[current_thread];
+            MINFO("Thread " << current_thread << " added " << thread_assignments[current_thread].size() 
+                  << " addresses with true block depths " << min_depth << " to " << max_depth);
           }
           
           // Create threads with assigned accounts
