@@ -87,6 +87,7 @@ namespace
     const command_line::arg_descriptor<bool> block_depth_threading;
     const command_line::arg_descriptor<std::uint64_t> min_block_depth;
     const command_line::arg_descriptor<std::uint64_t> split_synced;
+    const command_line::arg_descriptor<bool> balance_new_addresses;
 
     static std::string get_default_zmq()
     {
@@ -138,6 +139,7 @@ namespace
       , block_depth_threading{"block-depth-threading", "Balance thread workload by block depth instead of account count", false}
       , min_block_depth{"min-block-depth", "Minimum block depth for block depth threading (defaults to 16)", lws::MINIMUM_BLOCK_DEPTH}
       , split_synced{"split-synced", "Maximum block depth for an address to be considered synced (requires --block-depth-threading, 0 to disable)", 0}
+      , balance_new_addresses{"balance-new-addresses", "Assign new addresses to thread with highest blockheight (or fewest addresses if tied)", false}
     {}
 
     void prepare(boost::program_options::options_description& description) const
@@ -177,6 +179,7 @@ namespace
       command_line::add_arg(description, block_depth_threading);
       command_line::add_arg(description, min_block_depth);
       command_line::add_arg(description, split_synced);
+      command_line::add_arg(description, balance_new_addresses);
     }
   };
 
@@ -201,6 +204,7 @@ namespace
     bool block_depth_threading;
     std::uint64_t split_synced;
     std::uint64_t min_block_depth;
+    bool balance_new_addresses;
   };
 
   void print_help(std::ostream& out)
@@ -293,7 +297,8 @@ namespace
       command_line::get_arg(args, opts.regtest),
       command_line::get_arg(args, opts.block_depth_threading),
       command_line::get_arg(args, opts.split_synced),
-      command_line::get_arg(args, opts.min_block_depth)
+      command_line::get_arg(args, opts.min_block_depth),
+      command_line::get_arg(args, opts.balance_new_addresses)
     };
 
     if (prog.regtest && lws::config::network != cryptonote::MAINNET)
@@ -347,7 +352,7 @@ namespace
       prog.scan_threads,
       std::move(prog.lws_server_addr),
       std::move(prog.lws_server_pass),
-      lws::scanner_options{enable_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading, prog.split_synced, prog.min_block_depth}
+      lws::scanner_options{enable_subaddresses, prog.untrusted_daemon, prog.regtest, prog.block_depth_threading, prog.split_synced, prog.min_block_depth, prog.balance_new_addresses}
     );
   }
 } // anonymous
