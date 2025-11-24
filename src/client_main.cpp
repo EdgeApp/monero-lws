@@ -246,7 +246,7 @@ namespace
 
         if (!users.empty())
         {
-          static constexpr const lws::scanner_options opts{false, false, false, false, 0, lws::MINIMUM_BLOCK_DEPTH};
+          static constexpr const lws::scanner_options opts{false, false, false, true, 0.0, 10, lws::MINIMUM_BLOCK_DEPTH, };
 
           auto new_client = MONERO_UNWRAP(zclient.clone());
           MONERO_UNWRAP(new_client.watch_scan_signals());
@@ -375,7 +375,7 @@ int main(int argc, char** argv)
   }
   catch (std::exception const& e)
   {
-    MERROR("Client shutdown with error " << e.what());
+    MERROR("Client shutdown with err " << e.what());
     return EXIT_FAILURE;
   }
   catch (...)
