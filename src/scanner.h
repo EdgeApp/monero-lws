@@ -43,11 +43,18 @@
 
 namespace lws
 {
+  constexpr std::uint64_t MINIMUM_BLOCK_DEPTH = 16;
+
   struct scanner_options
   {
     bool enable_subaddresses;
     bool untrusted_daemon;
     bool regtest;
+    bool block_depth_threading;
+    double split_sync_threads;
+    std::uint64_t split_sync_depth;
+    std::uint64_t min_block_depth;
+    bool balance_new_addresses;
   };
 
   //! Used in `scan_loop` by server
