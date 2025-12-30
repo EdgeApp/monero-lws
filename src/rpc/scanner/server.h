@@ -42,6 +42,7 @@
 #include "net/net_ssl.h" // monero/contrib/epee/include
 #include "rpc/client.h"
 #include "rpc/scanner/queue.h"
+#include "scanner.h"
 
 namespace lws { namespace rpc { namespace scanner
 { 
@@ -72,7 +73,7 @@ namespace lws { namespace rpc { namespace scanner
     std::array<unsigned char, 32> pass_hashed_;
     std::array<unsigned char, crypto_pwhash_SALTBYTES> pass_salt_;
     bool stop_;
-    bool balance_new_addresses_;
+    scanner_options opts_;
 
     //! Async acceptor routine
     class acceptor;
@@ -87,7 +88,7 @@ namespace lws { namespace rpc { namespace scanner
   public:
     static boost::asio::ip::tcp::endpoint get_endpoint(const std::string& address);
 
-    explicit server(boost::asio::io_context& io, db::storage disk, rpc::client zclient, std::vector<std::shared_ptr<queue>> local, std::vector<db::account_id> active, std::shared_ptr<boost::asio::ssl::context> ssl, bool balance_new_addresses = false);
+    explicit server(boost::asio::io_context& io, db::storage disk, rpc::client zclient, std::vector<std::shared_ptr<queue>> local, std::vector<db::account_id> active, std::shared_ptr<boost::asio::ssl::context> ssl, const scanner_options& opts);
 
     server(const server&) = delete;
     server(server&&) = delete;

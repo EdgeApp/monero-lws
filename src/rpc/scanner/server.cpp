@@ -27,11 +27,13 @@
 
 #include "server.h"
 
+#include <algorithm>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/coroutine.hpp>
 #include <boost/asio/dispatch.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/numeric/conversion/cast.hpp>
+#include <cmath>
 #include <limits>
 #include <sodium/utils.h>
 #include <sodium/randombytes.h>
@@ -288,7 +290,7 @@ namespace lws { namespace rpc { namespace scanner
         return;
       }
 
-      if (self_->balance_new_addresses_ && !self_->local_.empty())
+      if (self_->opts_.balance_new_addresses && !self_->local_.empty())
       {
         // Algorithm: Assign new accounts to thread with height no more than 5 blocks above account height.
         // Prefer threads closer to the account scan height. Only supports local scanning for now
@@ -448,41 +450,233 @@ namespace lws { namespace rpc { namespace scanner
     if (local_.size() && (users.size() / local_.size()) < remote_threshold)
       remaining_threads = local_.size();
 
-    // make sure to notify of zero users too!
-    for (auto& local : local_)
+    // Use block_depth_threading if enabled (local threads only for now)
+    if (opts_.block_depth_threading && !local_.empty() && !users.empty())
     {
-      const auto user_count = users.size() / remaining_threads;
-
-      std::vector<lws::account> next{};
-      next.reserve(user_count);
-
-      for (std::size_t j = 0; !users.empty() && j < user_count; ++j)
+      MINFO("do_replace_users() called with block_depth_threading=" << opts_.block_depth_threading);
+      const std::size_t thread_count = local_.size();
+      
+      // Get current blockchain height
+      const db::block_id current_height = MONERO_UNWRAP(reader.get_last_block()).id;
+      
+      // Build full accounts list first
+      std::vector<lws::account> full_users;
+      full_users.reserve(users.size());
+      for (const auto& user : users)
+        full_users.push_back(MONERO_UNWRAP(reader.get_full_account(user)));
+      
+      // Calculate blockdepth for each account
+      struct account_depth {
+        std::size_t index;
+        std::uint64_t blockdepth;      // Adjusted blockdepth (with min_block_depth applied)
+        std::uint64_t raw_blockdepth;  // True blockdepth for split-sync classification
+      };
+      std::vector<account_depth> account_depths;
+      account_depths.reserve(full_users.size());
+      
+      std::uint64_t total_blockdepth = 0;
+      for (std::size_t i = 0; i < full_users.size(); ++i)
       {
-        next.push_back(MONERO_UNWRAP(reader.get_full_account(users.back())));
-        users.erase(users.end() - 1);
+        const std::uint64_t raw_blockdepth = std::uint64_t(current_height) - std::uint64_t(full_users[i].scan_height());
+        const std::uint64_t blockdepth = std::max(raw_blockdepth, opts_.min_block_depth);
+        account_depths.push_back(account_depth{i, blockdepth, raw_blockdepth});
+        total_blockdepth += blockdepth;
       }
+      
+      // Sort by raw_blockdepth (smallest first) to group accounts by true block depth
+      std::sort(account_depths.begin(), account_depths.end(),
+        [](const account_depth& a, const account_depth& b) {
+          return a.raw_blockdepth < b.raw_blockdepth;
+        });
+      
+      // Prepare thread assignment data structure
+      std::vector<std::vector<lws::account>> thread_assignments(thread_count);
+      
+      // Track min/max raw block depths for each thread (for logging)
+      std::vector<std::uint64_t> thread_min_raw_depth(thread_count, std::numeric_limits<std::uint64_t>::max());
+      std::vector<std::uint64_t> thread_max_raw_depth(thread_count, 0);
+      
+      // Initialize for standard block-depth-threading (all accounts, all threads)
+      std::vector<account_depth> accounts_to_assign = account_depths;
+      std::size_t start_thread = 0;
+      std::size_t num_threads_for_assignment = thread_count;
+      
+      // If split-sync is enabled, separate and assign synced accounts first
+      if (opts_.split_sync_threads > 0.0)
+      {
+        std::vector<account_depth> synced_accounts;
+        std::vector<account_depth> unsynced_accounts;
+        synced_accounts.reserve(account_depths.size());
+        unsynced_accounts.reserve(account_depths.size());
+        
+        for (const auto& ad : account_depths)
+        {
+          if (ad.raw_blockdepth <= opts_.split_sync_depth)
+            synced_accounts.push_back(ad);
+          else
+            unsynced_accounts.push_back(ad);
+        }
+        
+        if (synced_accounts.empty())
+        {
+          MINFO("No synced accounts, using all threads for unsynced accounts");
+          accounts_to_assign = std::move(unsynced_accounts);
+        }
+        else
+        {
+          const std::size_t num_synced_threads = std::max(std::size_t(1), 
+            static_cast<std::size_t>(std::ceil(opts_.split_sync_threads * thread_count)));
+          
+          const std::size_t actual_synced_threads = std::min(num_synced_threads, synced_accounts.size());
+          
+          for (std::size_t i = 0; i < synced_accounts.size(); ++i)
+          {
+            const std::size_t thread_idx = i % actual_synced_threads;
+            const auto& ad = synced_accounts[i];
+            thread_assignments[thread_idx].push_back(std::move(full_users[ad.index]));
+            
+            if (ad.raw_blockdepth < thread_min_raw_depth[thread_idx])
+              thread_min_raw_depth[thread_idx] = ad.raw_blockdepth;
+            if (ad.raw_blockdepth > thread_max_raw_depth[thread_idx])
+              thread_max_raw_depth[thread_idx] = ad.raw_blockdepth;
+          }
+          
+          accounts_to_assign = std::move(unsynced_accounts);
+          start_thread = num_synced_threads;
+          num_threads_for_assignment = thread_count - num_synced_threads;
+          
+          MINFO("Using split-sync threading: total_threads=" << thread_count
+                << ", synced_threads=" << num_synced_threads
+                << ", unsynced_threads=" << num_threads_for_assignment
+                << ", synced_accounts=" << synced_accounts.size()
+                << ", unsynced_accounts=" << accounts_to_assign.size());
 
-      local->replace_accounts(std::move(next));
-      --remaining_threads;
+          // Log the synced accounts assignments
+          for (std::size_t thread_idx = 0; thread_idx < actual_synced_threads; ++thread_idx)
+          {
+            if (!thread_assignments[thread_idx].empty())
+            {
+              const std::uint64_t min_depth = thread_min_raw_depth[thread_idx] == std::numeric_limits<std::uint64_t>::max() ? 0 : thread_min_raw_depth[thread_idx];
+              const std::uint64_t max_depth = thread_max_raw_depth[thread_idx];
+              MINFO("Thread " << thread_idx << " assigned " << thread_assignments[thread_idx].size() 
+                    << " synced accounts with block depths " << min_depth << " to " << max_depth);
+            }
+          }
+        }
+      }
+      else
+      {
+        MINFO("Using block-depth threading: total_blockdepth=" << total_blockdepth 
+              << ", min_block_depth=" << opts_.min_block_depth);
+      }
+      
+      // Distribute remaining accounts using block-depth-threading
+      if (!accounts_to_assign.empty() && num_threads_for_assignment > 0)
+      {
+        std::uint64_t assignment_total_blockdepth = 0;
+        for (const auto& ad : accounts_to_assign)
+          assignment_total_blockdepth += ad.blockdepth;
+        
+        const std::uint64_t blockdepth_per_thread = assignment_total_blockdepth / num_threads_for_assignment;
+        
+        std::size_t current_thread = start_thread;
+        std::uint64_t current_thread_depth = 0;
+        const std::size_t last_thread = start_thread + num_threads_for_assignment - 1;
+        
+        for (const auto& ad : accounts_to_assign)
+        {
+          bool should_move_to_next_thread = false;
+          
+          if (current_thread < last_thread)
+          {
+            const std::size_t relative_thread = current_thread - start_thread;
+            if (relative_thread % 2 == 0)
+              should_move_to_next_thread = (current_thread_depth >= blockdepth_per_thread);
+            else
+              should_move_to_next_thread = (current_thread_depth + ad.blockdepth > blockdepth_per_thread);
+            
+            if (should_move_to_next_thread)
+            {
+              if (!thread_assignments[current_thread].empty())
+              {
+                const std::uint64_t min_depth = thread_min_raw_depth[current_thread] == std::numeric_limits<std::uint64_t>::max() ? 0 : thread_min_raw_depth[current_thread];
+                const std::uint64_t max_depth = thread_max_raw_depth[current_thread];
+                MINFO("Thread " << current_thread << " assigned " << thread_assignments[current_thread].size() 
+                      << " accounts with block depths " << min_depth << " to " << max_depth);
+              }
+              
+              ++current_thread;
+              current_thread_depth = 0;
+            }
+          }
+          
+          thread_assignments[current_thread].push_back(std::move(full_users[ad.index]));
+          current_thread_depth += ad.blockdepth;
+          
+          if (ad.raw_blockdepth < thread_min_raw_depth[current_thread])
+            thread_min_raw_depth[current_thread] = ad.raw_blockdepth;
+          if (ad.raw_blockdepth > thread_max_raw_depth[current_thread])
+            thread_max_raw_depth[current_thread] = ad.raw_blockdepth;
+        }
+        
+        // Log the last thread
+        if (!thread_assignments[current_thread].empty())
+        {
+          const std::uint64_t min_depth = thread_min_raw_depth[current_thread] == std::numeric_limits<std::uint64_t>::max() ? 0 : thread_min_raw_depth[current_thread];
+          const std::uint64_t max_depth = thread_max_raw_depth[current_thread];
+          MINFO("Thread " << current_thread << " assigned " << thread_assignments[current_thread].size() 
+                << " accounts with block depths " << min_depth << " to " << max_depth);
+        }
+      }
+      
+      // Send assignments to local threads
+      for (std::size_t i = 0; i < local_.size(); ++i)
+        local_[i]->replace_accounts(std::move(thread_assignments[i]));
+      
+      // Remote threads get empty assignments when block_depth_threading is used
+      for (auto& remote : remotes)
+        write_command(remote, replace_accounts{std::vector<lws::account>{}});
     }
-
-    // make sure to notify of zero users too!
-    for (auto& remote : remotes)
+    else
     {
-      const auto users_per_thread = users.size() / std::max(std::size_t(1), remaining_threads);
-      const auto user_count = std::max(std::size_t(1), users_per_thread) * remote->threads_;
-
-      std::vector<lws::account> next{};
-      next.reserve(user_count);
-
-      for (std::size_t j = 0; !users.empty() && j < user_count; ++j)
+      MINFO("do_replace_users called using original round-robin algorithm: sort by height and divide evenly by count");
+      // Original algorithm: sort by height and divide evenly by count
+      // make sure to notify of zero users too!
+      for (auto& local : local_)
       {
-        next.push_back(MONERO_UNWRAP(reader.get_full_account(users.back())));
-        users.erase(users.end() - 1);
+        const auto user_count = users.size() / remaining_threads;
+
+        std::vector<lws::account> next{};
+        next.reserve(user_count);
+
+        for (std::size_t j = 0; !users.empty() && j < user_count; ++j)
+        {
+          next.push_back(MONERO_UNWRAP(reader.get_full_account(users.back())));
+          users.erase(users.end() - 1);
+        }
+
+        local->replace_accounts(std::move(next));
+        --remaining_threads;
       }
 
-      write_command(remote, replace_accounts{std::move(next)});
-      remaining_threads -= std::min(remaining_threads, remote->threads_);
+      // make sure to notify of zero users too!
+      for (auto& remote : remotes)
+      {
+        const auto users_per_thread = users.size() / std::max(std::size_t(1), remaining_threads);
+        const auto user_count = std::max(std::size_t(1), users_per_thread) * remote->threads_;
+
+        std::vector<lws::account> next{};
+        next.reserve(user_count);
+
+        for (std::size_t j = 0; !users.empty() && j < user_count; ++j)
+        {
+          next.push_back(MONERO_UNWRAP(reader.get_full_account(users.back())));
+          users.erase(users.end() - 1);
+        }
+
+        write_command(remote, replace_accounts{std::move(next)});
+        remaining_threads -= std::min(remaining_threads, remote->threads_);
+      }
     }
 
     next_thread_ = 0;
@@ -533,7 +727,7 @@ namespace lws { namespace rpc { namespace scanner
     };
   }
 
-  server::server(boost::asio::io_context& io, db::storage disk, rpc::client zclient, std::vector<std::shared_ptr<queue>> local, std::vector<db::account_id> active, std::shared_ptr<boost::asio::ssl::context> ssl, bool balance_new_addresses)
+  server::server(boost::asio::io_context& io, db::storage disk, rpc::client zclient, std::vector<std::shared_ptr<queue>> local, std::vector<db::account_id> active, std::shared_ptr<boost::asio::ssl::context> ssl, const scanner_options& opts)
     : strand_(io),
       check_timer_(io),
       acceptor_(io),
@@ -548,7 +742,7 @@ namespace lws { namespace rpc { namespace scanner
       pass_hashed_(),
       pass_salt_(),
       stop_(false),
-      balance_new_addresses_(balance_new_addresses)
+      opts_(opts)
   {
     std::sort(active_.begin(), active_.end());
     for (const auto& local : local_)

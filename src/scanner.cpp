@@ -426,13 +426,13 @@ namespace lws
 
             if (status.replace)
             {
-              MINFO("Received " << status.replace->size() << " replacement account(s) for scanning");
+              MINFO("Thread " << thread_n << " received " << status.replace->size() << " replacement account(s) for scanning");
               users = std::move(*status.replace);
               resort = true;
             }
             if (!status.push.empty())
             {
-              MINFO("Received " << status.push.size() << " new account(s) for scanning");
+              MINFO("Thread " << thread_n << " received " << status.push.size() << " new account(s) for scanning");
               users.insert(
                 users.end(),
                 std::make_move_iterator(status.push.begin()),
@@ -993,7 +993,7 @@ namespace lws
           queues,
           std::move(active),
           self.webhooks_.ssl_context(),
-          opts.balance_new_addresses
+          opts
         );
 
         rpc::scanner::server::start_user_checking(server);
