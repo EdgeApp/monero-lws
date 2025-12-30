@@ -539,6 +539,10 @@ namespace lws
           {
             ++(fetched->start_height);
 
+            // Check for stop periodically to allow faster shutdown
+            if (fetched->start_height % 100 == 0 && self.stop_)
+              return false;
+
             cryptonote::block const& block = boost::get<0>(block_data).block;
             auto const& txes = boost::get<0>(block_data).transactions;
 
@@ -631,6 +635,10 @@ namespace lws
 
           MINFO("Thread " << thread_n << " processed " << blockchain.size() << " blocks(s) @ height " << fetched->start_height << " against " << users.size() << " account(s)");
 
+          // Check for stop signal before attempting store (faster shutdown)
+          if (self.stop_)
+            return false;
+
           scan_transaction.disable_subaddresses(); // cleanup reader before next write
           if (!store(self.io_, client, self.webhooks_, epee::to_span(blockchain), epee::to_span(users), epee::to_span(new_pow)))
             return false;
@@ -701,8 +709,15 @@ namespace lws
               if (queue)
                 queue->stop();
             }
-            for (auto& thread : threads)
-              thread.join();
+
+            MINFO("Stopping " << threads.size() << " scanner thread(s)");
+            for (std::size_t i = 0; i < threads.size(); ++i)
+            {
+              // Re-send abort signal periodically in case threads missed it
+              if (i > 0 && i % 4 == 0)
+                ctx.raise_abort_scan();
+              threads[i].join();
+            }
           }
         } join{self, ctx, queues, threads};
 
