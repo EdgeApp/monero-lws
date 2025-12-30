@@ -290,51 +290,65 @@ namespace lws { namespace rpc { namespace scanner
 
       if (self_->balance_new_addresses_ && !self_->local_.empty())
       {
-        // New algorithm: Assign new accounts to thread with highest blockheight not above account height
-        // Only supports local scanning for now since remote clients can't share their scan heights.
+        // Algorithm: Assign new accounts to thread with height no more than 5 blocks above account height.
+        // Prefer threads closer to the account scan height. Only supports local scanning for now
+        // since remote clients can't share their scan heights.
+        constexpr std::uint64_t max_blocks_above = 5;
+        
         while (!new_accounts.empty())
         {
           const db::block_id account_height = new_accounts.back().scan_height();
-          std::size_t best_thread = 0;
-          db::block_id best_height = db::block_id(0);
-          std::size_t best_count = std::numeric_limits<std::size_t>::max();
-          bool found_below_or_equal = false;
+          const std::uint64_t account_height_val = std::uint64_t(account_height);
+          const std::uint64_t max_allowed_height = account_height_val + max_blocks_above;
           
-          // Check local threads
+          std::size_t best_thread = 0;
+          std::uint64_t best_distance = std::numeric_limits<std::uint64_t>::max();
+          std::size_t best_count = std::numeric_limits<std::size_t>::max();
+          bool found_eligible = false;
+          
+          // Check local threads - prefer threads within 5 blocks above, closest to account height
           for (std::size_t i = 0; i < self_->local_.size(); ++i)
           {
             const db::block_id height = self_->local_[i]->current_min_height();
+            const std::uint64_t height_val = std::uint64_t(height);
             const std::size_t count = self_->local_[i]->user_count();
             
-            if (height <= account_height)
+            // Only consider threads within 5 blocks above account height
+            if (height_val <= max_allowed_height)
             {
-              // Prefer thread with highest height <= account_height, or if tied, fewer addresses
-              if (!found_below_or_equal || height > best_height || (height == best_height && count < best_count))
+              const std::uint64_t distance = std::max(height_val, account_height_val) - std::min(height_val, account_height_val);
+              
+              // Prefer smaller distance to account height, then fewer addresses
+              if (!found_eligible || distance < best_distance || 
+                  (distance == best_distance && count < best_count))
               {
-                found_below_or_equal = true;
+                found_eligible = true;
                 best_thread = i;
-                best_height = height;
+                best_distance = distance;
                 best_count = count;
-              }
-            }
-            else
-            {
-              // Thread is above account height - only consider if no thread below/equal found yet
-              if (!found_below_or_equal)
-              {
-                // Prefer thread with lowest height, or if tied, fewer addresses
-                if (best_height == db::block_id(0) || height < best_height || (height == best_height && count < best_count))
-                {
-                  best_thread = i;
-                  best_height = height;
-                  best_count = count;
-                }
               }
             }
           }
           
-          MINFO("Thread " << best_thread << " at height " << std::uint64_t(best_height) 
-                << " received new account at height " << std::uint64_t(account_height));
+          // If no eligible thread found, fall back to thread with lowest height
+          if (!found_eligible)
+          {
+            std::uint64_t lowest_height = std::numeric_limits<std::uint64_t>::max();
+            for (std::size_t i = 0; i < self_->local_.size(); ++i)
+            {
+              const std::uint64_t height_val = std::uint64_t(self_->local_[i]->current_min_height());
+              const std::size_t count = self_->local_[i]->user_count();
+              if (height_val < lowest_height || (height_val == lowest_height && count < best_count))
+              {
+                best_thread = i;
+                lowest_height = height_val;
+                best_count = count;
+              }
+            }
+          }
+          
+          MINFO("Thread " << best_thread << " at height " << std::uint64_t(self_->local_[best_thread]->current_min_height()) 
+                << " received new account at height " << account_height_val);
           self_->local_[best_thread]->push_accounts(
             std::make_move_iterator(new_accounts.end() - 1),
             std::make_move_iterator(new_accounts.end())

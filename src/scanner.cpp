@@ -735,6 +735,12 @@ namespace lws
         attrs.set_stack_size(THREAD_STACK_SIZE);
 
         MINFO("Starting scan loops on " << thread_count << " thread(s) with " << users.size() << " account(s)");
+        MINFO("block_depth_threading: " << opts.block_depth_threading);
+        MINFO("split_sync_threads: " << opts.split_sync_threads);
+        MINFO("split_sync_depth: " << opts.split_sync_depth);
+        MINFO("min_block_depth: " << opts.min_block_depth);
+        MINFO("balance_new_addresses: " << opts.balance_new_addresses);
+
 
         if (opts.block_depth_threading)
         {
