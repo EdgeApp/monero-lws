@@ -977,7 +977,7 @@ namespace lws
           }
         }
 
-        if (pool && !ctx.pub_address().empty()) {
+        if (pool) {
           auto client = std::make_shared<rpc::client>(MONERO_UNWRAP(ctx.connect()));
           // Subscribe to scan abort signals so mempool thread exits on scanner reset
           MONERO_UNWRAP(client->watch_scan_signals());
