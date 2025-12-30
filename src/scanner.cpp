@@ -959,8 +959,11 @@ namespace lws
 
         if (pool && !ctx.pub_address().empty()) {
           auto client = std::make_shared<rpc::client>(MONERO_UNWRAP(ctx.connect()));
+          // Subscribe to scan abort signals so mempool thread exits on scanner reset
+          MONERO_UNWRAP(client->watch_scan_signals());
           threads.emplace_back(attrs, [pool, client, &self] ()
           {
+            MINFO("Mempool update thread starting");
             while (self.is_running())
             {
               try
@@ -980,6 +983,7 @@ namespace lws
                 MERROR("Pool update threw unknown exception");
               }
             }
+            MINFO("Mempool update thread exiting");
           });
         }
 
