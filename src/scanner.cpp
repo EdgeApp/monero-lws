@@ -280,8 +280,13 @@ namespace lws
       struct stop_
       {
         scanner_sync& self;
-        ~stop_() { self.stop(); }
-      } stop{self};
+        std::size_t thread_n;
+        ~stop_()
+        {
+          MINFO("Thread " << thread_n << " exiting scan loop");
+          self.stop();
+        }
+      } stop{self, thread_n};
 
       // thread entry point, so wrap everything in `try { } catch (...) {}`
       try
