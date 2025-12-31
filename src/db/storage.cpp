@@ -1623,6 +1623,7 @@ namespace db
         if (!user)
           return user.error();
 
+        MINFO("rollback_accounts: lowering scan_height for account id=" << std::uint32_t(user->id) << " from " << std::uint64_t(user->scan_height) << " to " << new_height << " (blockchain reorg)");
         user->scan_height = block_id(new_height);
         user->start_height = std::min(user->scan_height, user->start_height);
 
@@ -2486,6 +2487,8 @@ namespace db
         return user.error();
 
       const block_id current_height = user->scan_height;
+        if (height < current_height)
+          MINFO("change_height: lowering scan_height for account id=" << std::uint32_t(lookup->id) << " from " << std::uint64_t(current_height) << " to " << std::uint64_t(height));
       user->scan_height = std::min(height, user->scan_height);
       user->start_height = std::min(height, user->start_height);
       if (height <= user->lookahead_fail)
@@ -3290,8 +3293,16 @@ namespace db
           Duplicate writes should be supported as this (duplicate writes)
           happened historically due to a different bug involving scan heights.*/
         expect<account> existing = accounts.get_value<account>(value);
-        if (!existing || existing->scan_height < user->scan_height())
+        if (!existing)
+        {
+          MWARNING("Skipping account " << user->address() << " (id=" << std::uint32_t(user->id()) << "): account not found in DB during update");
           continue; // to next account
+        }
+        if (existing->scan_height < user->scan_height())
+        {
+          MWARNING("Skipping stale account " << user->address() << " (id=" << std::uint32_t(user->id()) << "): DB scan_height=" << std::uint64_t(existing->scan_height) << " < scanner scan_height=" << std::uint64_t(user->scan_height()) << " (was modified during scan)");
+          continue; // to next account
+        }
 
         // Don't re-store data if already scanned
         ++out.accounts_updated;
@@ -3436,6 +3447,7 @@ namespace db
         if (upserted != error::max_subaddresses)
           return upserted.error();
 
+        MWARNING("update_lookahead: max_subaddresses reached for account id=" << std::uint32_t(user->id) << " at height " << std::uint64_t(height) << ", setting lookahead_fail (will require rescan)");
         if (user->lookahead_fail == block_id(0))
           user->lookahead_fail = std::max(block_id(1), height);
         else
