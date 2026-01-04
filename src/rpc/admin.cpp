@@ -81,6 +81,7 @@ namespace
     wire::object(dest,
       wire::field("address", lws::db::address_string(self.value.address)),
       wire::field("scan_height", self.value.scan_height),
+      wire::field("start_height", self.value.start_height),
       wire::field("access_time", self.value.access)
     );
   }

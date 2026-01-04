@@ -111,6 +111,7 @@ The response will look something like:
     {
       "address": "9wRAu3giCtKhSsVnkZJ7LLE6zqzrmMKpPg39S8aoC7T6F6GobeDpz8TcvVfTQT3ucW82oTYKG8v3ZMAeh8SZVXWwMdvwZew",
       "scan_height": 2220875,
+      "start_height": 2220000,
       "access_time": 1681244149
     }
   ]
